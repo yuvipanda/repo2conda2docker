@@ -41,6 +41,8 @@ class PrimaryPythonBuildPack(BuildPack):
 
         # Set up PATH
         ENV PATH=${NB_PYTHON_PREFIX}/bin:${PATH}
+        # Set up shell to be bash
+        ENV SHELL=/bin/bash
 
         # Set up user
         ARG NB_USER
@@ -62,8 +64,14 @@ class PrimaryPythonBuildPack(BuildPack):
 
         # FIXME: add apt.txt support here
 
+        {% if build_script_files -%}
+        # If scripts required during build are present, copy them
+        {% for src, dst in build_script_files|dictsort %}
+        COPY {{ src }} {{ dst }}
+        {% endfor -%}
+        {% endif -%}
+
         # Use pre-existing base install
-        COPY {{ base_env_path }} /tmp/base-environment.frozen.yml
         RUN conda env update -p ${NB_PYTHON_PREFIX} -f /tmp/base-environment.frozen.yml
 
         # Allow target path repo is cloned to be configurable
@@ -75,14 +83,9 @@ class PrimaryPythonBuildPack(BuildPack):
 
         USER ${NB_USER}
 
-        COPY {{ activate_conda_path }} /etc/profile.d/activate-conda.sh
-
         # Add entrypoint
-        COPY /repo2docker-entrypoint /usr/local/bin/repo2docker-entrypoint
         ENTRYPOINT ["/usr/local/bin/repo2docker-entrypoint"]
 
-
-        ENV SHELL=/bin/bash
         # Specify the default command to run
         CMD ["jupyter", "notebook", "--ip", "0.0.0.0"]
     """
@@ -90,16 +93,28 @@ class PrimaryPythonBuildPack(BuildPack):
     def get_build_script_files(self):
         return {
            str(pathlib.Path(__file__).resolve().parent / "environment.yml"): "/tmp/base-environment.frozen.yml",
-           str(pathlib.Path(__file__).resolve().parent / "entrypoint"): "/usr/local/bin/entrypoint",
+           str(pathlib.Path(__file__).resolve().parent / "entrypoint"): "/usr/local/bin/repo2docker-entrypoint",
            str(pathlib.Path(__file__).resolve().parent / "activate-conda.sh"): "/etc/profile.d/activate-conda.sh"
         }
 
     def render(self):
         t = jinja2.Template(self.TEMPLATE)
 
-        return t.render(
+        # Based on a physical location of a build script on the host,
+        # create a mapping between:
+        #   1. Location of a build script in a Docker build context
+        #      ('assemble_files/<escaped-file-path-truncated>-<6-chars-of-its-hash>')
+        #   2. Location of the aforemention script in the Docker image
+        # Base template basically does: COPY <1.> <2.>
+        build_script_files = {
+            self.generate_build_context_filename(k)[0]: v
+            for k, v in self.get_build_script_files().items()
+        }
+
+        template = t.render(
             miniconda_version="4.7.12",
-            base_env_path=self.generate_build_context_filename(str(pathlib.Path(__file__).resolve().parent / "environment.yml"))[0],
-            entrypoint_path=self.generate_build_context_filename(str(pathlib.Path(__file__).resolve().parent / "entrypoint"))[0],
-            activate_conda_path=self.generate_build_context_filename(str(pathlib.Path(__file__).resolve().parent / "activate-conda.sh"))[0],
+            build_script_files=build_script_files
         )
+        self.log.debug("Generated template...")
+        self.log.debug(template)
+        return template
