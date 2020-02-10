@@ -50,6 +50,12 @@ class PrimaryPythonBuildPack(BuildPack):
         ENV USER ${NB_USER}
         ENV HOME /home/${NB_USER}
 
+        # Allow target path repo is cloned to be configurable
+        ARG REPO_DIR=${HOME}
+        ENV REPO_DIR ${REPO_DIR}
+        WORKDIR ${REPO_DIR}
+
+        # Create group + user, and set proper permissions on home directory
         RUN groupadd \
                 --gid ${NB_UID} \
                 ${NB_USER} && \
@@ -60,9 +66,13 @@ class PrimaryPythonBuildPack(BuildPack):
                 --no-log-init \
                 --shell /bin/bash \
                 --uid ${NB_UID} \
-                ${NB_USER}
+                ${NB_USER} && \
+            chown ${NB_USER}:${NB_USER} ${HOME}
 
-        # FIXME: add apt.txt support here
+        # Unfortunately, we have to chown the entire $CONDA_PREFIX to our user
+        # otherwise it is owned by root, and we can't install stuff into it. ;_;
+        # This increases the size of the image by a *lot*
+        RUN chown -R ${NB_USER}:${NB_USER} ${CONDA_DIR}
 
         {% if build_script_files -%}
         # If scripts required during build are present, copy them
@@ -71,17 +81,13 @@ class PrimaryPythonBuildPack(BuildPack):
         {% endfor -%}
         {% endif -%}
 
-        # Use pre-existing base install
+        # FIXME: add apt.txt support here
+
+        # Install our base environment into pre-existing environment
+        USER ${NB_USER}
         RUN conda env update -p ${NB_PYTHON_PREFIX} -f /tmp/base-environment.frozen.yml
 
-        # Allow target path repo is cloned to be configurable
-        ARG REPO_DIR=${HOME}
-        ENV REPO_DIR ${REPO_DIR}
-        WORKDIR ${REPO_DIR}
-
         COPY --chown=${NB_UID} src/ ${REPO_DIR}
-
-        USER ${NB_USER}
 
         # Add entrypoint
         ENTRYPOINT ["/usr/local/bin/repo2docker-entrypoint"]
